@@ -64,13 +64,13 @@ export default function Chat() {
     return bluffs[Math.floor(Math.random() * bluffs.length)];
   }
 
-  function getBehaviorMessage(current, previous) {
+  function getBehaviorLabel(current, previous) {
     if (previous === null) return "";
     const diff = current - previous;
 
-    if (diff === 0) return "You already said that 😐";
-    if (diff > 0 && diff < 500) return "That's barely an improvement 🤏";
-    if (diff >= 2000) return "Now that's serious 😯";
+    if (diff === 0) return "repeat";
+    if (diff > 0 && diff < 500) return "small_improve";
+    if (diff >= 2000) return "big_jump";
 
     return "";
   }
@@ -107,7 +107,7 @@ export default function Chat() {
       { text: "AI is typing...", type: "ai", thinking: true },
     ]);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       let reply = "";
       const personality = getPersonality(nextRound);
 
@@ -131,14 +131,32 @@ export default function Chat() {
         currentAsk.current = minPrice.current;
       }
 
-      // 🎯 Deal logic
-      if (userPrice < minPrice.current) {
-        reply =
-          personality === "friendly"
-            ? "Hmm… that's too low 😅"
-            : "Way too low ❌";
-      } else if (userPrice >= currentAsk.current) {
-        reply = "Deal! 🤝";
+      // 🎯 Signals
+      const distance = currentAsk.current - userPrice;
+      let distanceLabel = "close";
+      if (distance > 3000) distanceLabel = "far";
+      else if (distance > 1000) distanceLabel = "medium";
+
+      const behaviorLabel = getBehaviorLabel(
+        userPrice,
+        lastUserPrice.current
+      );
+
+      const fakeLimitTriggered =
+        userPrice < fakeLimit.current && nextRound >= 3;
+
+      let bluffTriggered = false;
+      if (nextRound >= 3 && userPrice >= meanPrice.current) {
+        bluffTriggered = Math.random() < 0.3;
+      }
+
+      let decision = "";
+      if (userPrice < minPrice.current) decision = "REJECT";
+      else if (userPrice >= currentAsk.current) decision = "ACCEPT";
+      else decision = "NEGOTIATE";
+
+      // 🎯 Deal state updates
+      if (decision === "ACCEPT") {
 
         setResult({
           final: userPrice,
@@ -148,51 +166,48 @@ export default function Chat() {
 
         saveScore(userPrice, minPrice.current);
         setGameOver(true);
-      } else {
-        const distance = currentAsk.current - userPrice;
-
-        if (distance > 3000) reply = "Still far… try better 🟡";
-        else if (distance > 1000) reply = "Hmm… getting closer 🤔";
-        else reply = "Now we’re talking… very close 🟢";
       }
 
-      // 🎭 Fake limit
-      if (userPrice < fakeLimit.current && nextRound >= 3) {
-        reply += `\nI can’t go below ₹${fakeLimit.current}...`;
-      }
+      // 🤖 AI reply generation
+      try {
+        const endpoints = [
+          "http://localhost:3000/api/ai-reply",
+        ];
 
-      // 🎭 Bluff
-      if (nextRound >= 3 && userPrice >= meanPrice.current) {
-        if (Math.random() < 0.3) {
-          reply += "\n" + getBluffMessage();
+        let aiReply = "";
+
+        for (const endpoint of endpoints) {
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              decision,
+              personality,
+              round: nextRound,
+              distance: distanceLabel,
+              behavior: behaviorLabel,
+              playerType: playerType.current,
+              fakeLimit: fakeLimitTriggered,
+              isBluff: bluffTriggered,
+            }),
+          });
+
+          if (!res.ok) continue;
+
+          const data = await res.json();
+          if (data?.reply) {
+            aiReply = data.reply;
+            break;
+          }
         }
+
+        reply = aiReply || "Hmm… something went wrong, try again.";
+      } catch (err) {
+        reply = "Hmm… something went wrong, try again.";
       }
-
-      // 🧠 Behavior
-      const behavior = getBehaviorMessage(
-        userPrice,
-        lastUserPrice.current
-      );
-      if (behavior) reply += "\n" + behavior;
-
-      // 🔥 Player reaction
-      if (playerType.current === "aggressive") {
-        reply += "\nYou're pushing too hard 😏";
-      }
-      if (playerType.current === "desperate") {
-        reply += "\nYou really want this 😄";
-      }
-
-      // 💰 Show current ask
-      reply += `\n💰 My current price: ₹${currentAsk.current}`;
-
-      // ⚠️ Pressure
-      if (roundsLeft === 2) reply += "\n⚠️ Only 2 rounds left…";
-      if (roundsLeft === 1) reply += "\n🚨 Final round!";
 
       // 🏁 Game over
       if (nextRound >= MAX_ROUNDS && !gameOver) {
-        reply += "\n💀 Game Over!";
         setResult({
           final: lastUserPrice.current || currentAsk.current,
           original: originalPrice.current,
@@ -202,7 +217,6 @@ export default function Chat() {
           lastUserPrice.current || currentAsk.current,
           minPrice.current
         );
-
 
         setGameOver(true);
       }
