@@ -171,7 +171,7 @@ export default function Chat() {
       // 🤖 AI reply generation
       try {
         const endpoints = [
-          "http://localhost:3000/api/ai-reply",
+          "https://negotiating-aap.onrender.com/api/ai-reply",
         ];
 
         let aiReply = "";
